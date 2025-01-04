@@ -5,6 +5,8 @@ This will run periodically from my home server and use multiple IP identificatio
 
 https://dash.cloudflare.com/profile/api-tokens
 """
+import argparse
+import logging
 import os
 import random
 
@@ -19,6 +21,9 @@ DOMAIN = os.environ.get('DOMAIN')
 A_RECORD_NAME = os.environ.get('A_RECORD_NAME')
 FQDN = f'{A_RECORD_NAME}.{DOMAIN}'
 
+LOG = logging.getLogger('krets')
+LOG.addHandler(logging.StreamHandler())
+LOG.handlers[-1].setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 
 class Cloudflare:
     def __init__(self, zone_id=ZONE_ID):
@@ -32,7 +37,9 @@ class Cloudflare:
 
     def _request(self, method, endpoint, **kwargs):
         url = f"{self.base_url}/{endpoint}"
+        LOG.debug(f"{method}: {url} params: {kwargs.get('params', {})}")
         response = self.session.request(method, url, **kwargs)
+        LOG.debug(f"response: {response.status_code} {response.reason}")
         response.raise_for_status()
         return response.json()
 
@@ -81,15 +88,25 @@ def get_current_ip():
                 value = data.get('ip', None)
             except ValueError:
                 value = response.text.strip()
-            print(f"Found current IP: {value} from: {service}")
+            LOG.debug(f"Found current IP: {value} from: {service}")
             return value
 
-        except requests.RequestException:
+        except requests.RequestException as error:
+            LOG.warning(f"Failed to get IP from {service}: {error}")
             continue
     return None
 
+def parse_args():
+    parser = argparse.ArgumentParser('Cloudflare DNS Updater')
+    parser.add_argument('-v', '--verbose', action='store_true')
+    return parser.parse_args()
 
 def main():
+
+    args = parse_args()
+    level = logging.DEBUG if args.verbose else logging.INFO
+    LOG.setLevel(level)
+
     cloudflare = Cloudflare()
     record = cloudflare.record_by_name(FQDN)
 
@@ -98,14 +115,14 @@ def main():
         record_ip = record.get('content')
         current_ip = get_current_ip()
         if record_ip == current_ip:
-            print(f"Current IP: {current_ip} matches '{FQDN}'")
+            LOG.info(f"Current IP: {current_ip} matches '{FQDN}'")
         elif cloudflare.update_dns_record(record_id, current_ip):
-            print(f"Successfully updated '{FQDN}' record to {current_ip}")
+            LOG.info(f"Successfully updated '{FQDN}' record to {current_ip}")
         else:
             # raise for status will likely bypass this branch
-            print(f"Failed to update DNS record for '{FQDN}'")
+            LOG.error(f"Failed to update DNS record for '{FQDN}'")
     else:
-        print(f"No A record found for '{FQDN}'")
+        LOG.warning(f"No A record found for '{FQDN}'")
     pass
 
 
